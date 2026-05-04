@@ -26,6 +26,7 @@ func main() {
 	var token string
 	var enableTLS bool
 	var insecure bool
+	var httpMode bool
 
 	rootCmd := &cobra.Command{
 		Use:   "gotunnel-client",
@@ -52,6 +53,9 @@ func main() {
 				}
 				if !cmd.Flags().Changed("insecure") && cfg.Insecure {
 					insecure = true
+				}
+				if !cmd.Flags().Changed("http") && cfg.HTTP {
+					httpMode = true
 				}
 				// Convert config tunnels to tunnel specs if --tunnel not set
 				if !cmd.Flags().Changed("tunnel") && len(cfg.Tunnels) > 0 {
@@ -90,6 +94,7 @@ func main() {
 
 			client.SetDialTimeout(5 * time.Second)
 			client.SetToken(token)
+			client.SetHTTPMode(httpMode)
 			if enableTLS {
 				client.SetTLSConfig(&tls.Config{
 					InsecureSkipVerify: insecure,
@@ -135,6 +140,7 @@ func main() {
 				}
 				client.SetDialTimeout(5 * time.Second)
 				client.SetToken(token)
+				client.SetHTTPMode(httpMode)
 				if enableTLS {
 					client.SetTLSConfig(&tls.Config{
 						InsecureSkipVerify: insecure,
@@ -152,6 +158,7 @@ func main() {
 	rootCmd.Flags().StringVar(&token, "token", "", "Authentication token")
 	rootCmd.Flags().BoolVar(&enableTLS, "tls", false, "Enable TLS for control channel")
 	rootCmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS certificate verification (for self-signed certs)")
+	rootCmd.Flags().BoolVar(&httpMode, "http", false, "Enable HTTP header injection (X-Forwarded-For, X-Real-IP)")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

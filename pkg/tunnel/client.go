@@ -2,10 +2,14 @@
 package tunnel
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +28,7 @@ type Client struct {
 	dialTimeout time.Duration
 	token       string      // optional auth token
 	tlsConfig   *tls.Config // nil = no TLS
+	httpMode    bool        // inject X-Forwarded-For headers
 	conn        net.Conn
 	writer      sync.Mutex
 
@@ -33,6 +38,9 @@ type Client struct {
 
 	localConns   map[string]net.Conn
 	localConnsMu sync.Mutex
+
+	firstData   map[string]bool // connID -> whether first data has been processed
+	firstDataMu sync.Mutex
 }
 
 // NewClient creates a client that will connect to the given server.
@@ -43,6 +51,7 @@ func NewClient(serverAddr string) *Client {
 		dialTimeout: 5 * time.Second,
 		routes:      make(map[int]*tunnelRoute),
 		localConns:  make(map[string]net.Conn),
+		firstData:   make(map[string]bool),
 	}
 }
 
@@ -64,6 +73,11 @@ func (c *Client) SetToken(token string) {
 // SetTLSConfig configures TLS for the control channel. If nil, TLS is disabled.
 func (c *Client) SetTLSConfig(cfg *tls.Config) {
 	c.tlsConfig = cfg
+}
+
+// SetHTTPMode enables HTTP header injection (X-Forwarded-For, X-Real-IP).
+func (c *Client) SetHTTPMode(enabled bool) {
+	c.httpMode = enabled
 }
 
 // RemotePort returns the first assigned remote port (for single-tunnel compatibility).
@@ -258,12 +272,31 @@ func (c *Client) forwardToLocal(connID string, data []byte) {
 		return
 	}
 
+	// HTTP mode: inject headers on first data
+	if c.httpMode {
+		c.firstDataMu.Lock()
+		processed := c.firstData[connID]
+		c.firstDataMu.Unlock()
+
+		if !processed {
+			data = c.injectHTTPHeaders(connID, data)
+			c.firstDataMu.Lock()
+			c.firstData[connID] = true
+			c.firstDataMu.Unlock()
+		}
+	}
+
 	if _, err := localConn.Write(data); err != nil {
 		slog.Error("write to local", "err", err, "connID", connID)
 	}
 }
 
 func (c *Client) closeLocalConn(connID string) {
+	// Clean up firstData tracking
+	c.firstDataMu.Lock()
+	delete(c.firstData, connID)
+	c.firstDataMu.Unlock()
+
 	c.localConnsMu.Lock()
 	localConn, ok := c.localConns[connID]
 	c.localConnsMu.Unlock()
@@ -337,4 +370,59 @@ func (c *Client) Close() error {
 		return c.conn.Close()
 	}
 	return nil
+}
+
+// injectHTTPHeaders checks if data looks like an HTTP request and adds
+// X-Forwarded-For and X-Real-IP headers. Returns data unchanged if not HTTP.
+func (c *Client) injectHTTPHeaders(connID string, data []byte) []byte {
+	// Quick check: does it look like an HTTP request?
+	if !isHTTPRequest(data) {
+		return data
+	}
+
+	// Parse the HTTP request
+	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(data)))
+	if err != nil {
+		return data // not parseable, pass through
+	}
+	defer req.Body.Close()
+
+	// Get the remote address from the connection
+	c.localConnsMu.Lock()
+	localConn, ok := c.localConns[connID]
+	c.localConnsMu.Unlock()
+	if !ok {
+		return data
+	}
+
+	remoteAddr := localConn.RemoteAddr().String()
+	// Extract IP from "ip:port"
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		remoteAddr = host
+	}
+
+	// Inject headers if not already present
+	if req.Header.Get("X-Forwarded-For") == "" {
+		req.Header.Set("X-Forwarded-For", remoteAddr)
+	}
+	if req.Header.Get("X-Real-IP") == "" {
+		req.Header.Set("X-Real-IP", remoteAddr)
+	}
+
+	// Reconstruct the request
+	var buf bytes.Buffer
+	req.Write(&buf)
+	return buf.Bytes()
+}
+
+// isHTTPRequest does a quick check if data looks like an HTTP request.
+func isHTTPRequest(data []byte) bool {
+	methods := []string{"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH "}
+	s := string(data)
+	for _, m := range methods {
+		if strings.HasPrefix(s, m) {
+			return true
+		}
+	}
+	return false
 }

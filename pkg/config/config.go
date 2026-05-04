@@ -35,6 +35,7 @@ type ClientConfig struct {
 	Token      string         `yaml:"token"`
 	TLS        bool           `yaml:"tls"`
 	Insecure   bool           `yaml:"insecure"`
+	HTTP       bool           `yaml:"http"`
 }
 
 type TunnelConfig struct {
