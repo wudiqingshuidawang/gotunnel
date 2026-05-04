@@ -11,15 +11,16 @@ import (
 
 // ServerConfig holds server-side configuration.
 type ServerConfig struct {
-	ControlPort int           `yaml:"port"`
-	MinPort     int           `yaml:"min_port"`
-	MaxPort     int           `yaml:"max_port"`
-	Token       string        `yaml:"token"`
-	TLS         TLSConfig     `yaml:"tls"`
-	MaxClients  int           `yaml:"max_clients"`
-	MaxTunnels  int           `yaml:"max_tunnels"`
-	MaxSessions int           `yaml:"max_sessions"`
-	Timeout     time.Duration `yaml:"client_timeout"`
+	ControlPort    int           `yaml:"port"`
+	MinPort        int           `yaml:"min_port"`
+	MaxPort        int           `yaml:"max_port"`
+	Token          string        `yaml:"token"`
+	TLS            TLSConfig     `yaml:"tls"`
+	MaxClients     int           `yaml:"max_clients"`
+	MaxTunnels     int           `yaml:"max_tunnels"`
+	MaxSessions    int           `yaml:"max_sessions"`
+	Timeout        time.Duration `yaml:"client_timeout"`
+	DashboardPort  int           `yaml:"dashboard_port"`
 }
 
 type TLSConfig struct {

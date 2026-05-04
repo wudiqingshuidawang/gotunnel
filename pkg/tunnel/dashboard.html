@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gotunnel dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
+  h1 { font-size: 1.5rem; margin-bottom: 1.5rem; color: #38bdf8; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+  .card { background: #1e293b; border-radius: 8px; padding: 1.2rem; }
+  .card .label { font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; letter-spacing: 0.05em; }
+  .card .value { font-size: 2rem; font-weight: 700; margin-top: 0.3rem; color: #f8fafc; }
+  table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 8px; overflow: hidden; }
+  th { text-align: left; padding: 0.7rem 1rem; font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; background: #0f172a; }
+  td { padding: 0.7rem 1rem; border-top: 1px solid #334155; font-size: 0.9rem; }
+  .empty { color: #64748b; font-style: italic; text-align: center; padding: 2rem; }
+  #status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; margin-right: 0.5rem; }
+</style>
+</head>
+<body>
+<h1><span id="status"></span>gotunnel</h1>
+
+<div class="grid">
+  <div class="card"><div class="label">Clients</div><div class="value" id="clients">-</div></div>
+  <div class="card"><div class="label">Tunnels</div><div class="value" id="tunnels">-</div></div>
+  <div class="card"><div class="label">Active Sessions</div><div class="value" id="sessions">-</div></div>
+  <div class="card"><div class="label">Total Connections</div><div class="value" id="totalConns">-</div></div>
+  <div class="card"><div class="label">Bytes In</div><div class="value" id="bytesIn">-</div></div>
+  <div class="card"><div class="label">Bytes Out</div><div class="value" id="bytesOut">-</div></div>
+</div>
+
+<h2 style="font-size:1.1rem; margin-bottom:0.8rem;">Tunnels</h2>
+<table>
+  <thead><tr><th>Port</th><th>Client</th></tr></thead>
+  <tbody id="tunnelList"><tr><td colspan="2" class="empty">No active tunnels</td></tr></tbody>
+</table>
+
+<script>
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
+  return (b/1073741824).toFixed(1) + ' GB';
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/stats');
+    const s = await r.json();
+    document.getElementById('clients').textContent = s.clients;
+    document.getElementById('tunnels').textContent = s.tunnels;
+    document.getElementById('sessions').textContent = s.sessions;
+    document.getElementById('totalConns').textContent = s.total_conns;
+    document.getElementById('bytesIn').textContent = formatBytes(s.total_bytes_in);
+    document.getElementById('bytesOut').textContent = formatBytes(s.total_bytes_out);
+    document.getElementById('status').style.background = '#22c55e';
+
+    const tbody = document.getElementById('tunnelList');
+    if (s.tunnel_details && s.tunnel_details.length > 0) {
+      tbody.innerHTML = s.tunnel_details.map(t =>
+        `<tr><td>${t.port}</td><td>${t.client_id}...</td></tr>`
+      ).join('');
+    } else {
+      tbody.innerHTML = '<tr><td colspan="2" class="empty">No active tunnels</td></tr>';
+    }
+  } catch(e) {
+    document.getElementById('status').style.background = '#ef4444';
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

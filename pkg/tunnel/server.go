@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yan/gotunnel/pkg/protocol"
@@ -33,6 +34,11 @@ type Server struct {
 	sessions map[string]*sessionState // connID -> session
 	stopCh   chan struct{}
 	readyCh  chan struct{} // closed when listener is ready
+
+	// Stats
+	totalConns   atomic.Int64
+	totalBytesIn atomic.Int64
+	totalBytesOut atomic.Int64
 }
 
 type clientState struct {
@@ -99,6 +105,47 @@ func (s *Server) SetClientTimeout(d time.Duration) { s.clientTimeout = d }
 // SetTLSConfig configures TLS for the control channel. If nil, TLS is disabled.
 func (s *Server) SetTLSConfig(cfg *tls.Config) {
 	s.tlsConfig = cfg
+}
+
+// ServerStats holds runtime statistics.
+type ServerStats struct {
+	Clients       int            `json:"clients"`
+	Tunnels       int            `json:"tunnels"`
+	Sessions      int            `json:"sessions"`
+	TotalConns    int64          `json:"total_conns"`
+	TotalBytesIn  int64          `json:"total_bytes_in"`
+	TotalBytesOut int64          `json:"total_bytes_out"`
+	TunnelDetails []TunnelDetail `json:"tunnel_details"`
+}
+
+type TunnelDetail struct {
+	Port       int    `json:"port"`
+	ClientID   string `json:"client_id"`
+	RemoteAddr string `json:"remote_addr,omitempty"`
+}
+
+// Stats returns a snapshot of server statistics.
+func (s *Server) Stats() ServerStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	stats := ServerStats{
+		Clients:       len(s.clients),
+		Tunnels:       len(s.tunnels),
+		Sessions:      len(s.sessions),
+		TotalConns:    s.totalConns.Load(),
+		TotalBytesIn:  s.totalBytesIn.Load(),
+		TotalBytesOut: s.totalBytesOut.Load(),
+	}
+
+	for port, ts := range s.tunnels {
+		stats.TunnelDetails = append(stats.TunnelDetails, TunnelDetail{
+			Port:     port,
+			ClientID: ts.clientID[:8],
+		})
+	}
+
+	return stats
 }
 
 func (s *Server) Start() error {
@@ -363,6 +410,7 @@ func (s *Server) acceptPublicConnections(ts *tunnelState, cs *clientState) {
 		}
 
 		connID := newUUID()
+		s.totalConns.Add(1)
 		slog.Info("new public connection", "connID", connID, "port", ts.remotePort)
 
 		sess := &sessionState{
@@ -389,6 +437,7 @@ func (s *Server) relayPublicToClient(publicConn net.Conn, cs *clientState, connI
 	for {
 		n, err := publicConn.Read(buf)
 		if n > 0 {
+			s.totalBytesIn.Add(int64(n))
 			data := make([]byte, n)
 			copy(data, buf[:n])
 			s.writeFrame(cs, protocol.Frame{
@@ -430,7 +479,10 @@ func (s *Server) handleDataFromClient(frame protocol.Frame) {
 
 	sess.writer.Lock()
 	defer sess.writer.Unlock()
-	sess.publicConn.Write(msg.Data)
+	n, _ := sess.publicConn.Write(msg.Data)
+	if n > 0 {
+		s.totalBytesOut.Add(int64(n))
+	}
 }
 
 func (s *Server) handleCloseFromClient(frame protocol.Frame) {

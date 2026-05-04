@@ -32,6 +32,7 @@ func main() {
 	var clientTimeout time.Duration
 	var tlsCert, tlsKey string
 	var tlsAuto bool
+	var dashboardPort int
 
 	rootCmd := &cobra.Command{
 		Use:   "gotunnel-server",
@@ -80,6 +81,9 @@ func main() {
 				}
 				if !cmd.Flags().Changed("tls-key") && cfg.TLS.Key != "" {
 					tlsKey = cfg.TLS.Key
+				}
+				if !cmd.Flags().Changed("dashboard-port") && cfg.DashboardPort != 0 {
+					dashboardPort = cfg.DashboardPort
 				}
 			}
 
@@ -132,6 +136,11 @@ func main() {
 				"port_range", fmt.Sprintf("%d-%d", minPort, maxPort),
 			)
 
+			// Start dashboard if port is configured
+			if dashboardPort > 0 {
+				srv.StartDashboard(fmt.Sprintf(":%d", dashboardPort))
+			}
+
 			return srv.Start()
 		},
 	}
@@ -148,6 +157,7 @@ func main() {
 	rootCmd.Flags().StringVar(&tlsCert, "tls-cert", "", "Path to TLS certificate file")
 	rootCmd.Flags().StringVar(&tlsKey, "tls-key", "", "Path to TLS key file")
 	rootCmd.Flags().BoolVar(&tlsAuto, "tls-auto", false, "Auto-generate self-signed TLS certificate")
+	rootCmd.Flags().IntVar(&dashboardPort, "dashboard-port", 0, "Web dashboard port (0=disabled)")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
