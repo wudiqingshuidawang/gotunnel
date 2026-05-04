@@ -1,0 +1,14 @@
+# gotunnel client configuration
+# Usage: gotunnel-client --config client.yaml
+
+server: "your-vps:7000"
+token: "change-me-to-a-secret-token"
+tls: false
+insecure: false         # skip cert verification (for self-signed)
+
+# Tunnels to register
+tunnels:
+  - local: 3000         # expose local port 3000 (auto-assign remote port)
+  - local: 5432
+    remote: 9000        # expose local port 5432 on remote port 9000
+  - local: 6379

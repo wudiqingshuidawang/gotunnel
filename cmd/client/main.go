@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/yan/gotunnel/pkg/config"
 	"github.com/yan/gotunnel/pkg/tunnel"
 )
 
 func main() {
+	var configFile string
 	var serverAddr string
 	var tunnelSpecs []string
 	var localPort int
@@ -32,6 +34,37 @@ func main() {
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 				Level: slog.LevelInfo,
 			})))
+
+			// Load config file if specified
+			if configFile != "" {
+				cfg, err := config.LoadClientConfig(configFile)
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
+				if !cmd.Flags().Changed("server") && cfg.ServerAddr != "" {
+					serverAddr = cfg.ServerAddr
+				}
+				if !cmd.Flags().Changed("token") && cfg.Token != "" {
+					token = cfg.Token
+				}
+				if !cmd.Flags().Changed("tls") && cfg.TLS {
+					enableTLS = true
+				}
+				if !cmd.Flags().Changed("insecure") && cfg.Insecure {
+					insecure = true
+				}
+				// Convert config tunnels to tunnel specs if --tunnel not set
+				if !cmd.Flags().Changed("tunnel") && len(cfg.Tunnels) > 0 {
+					tunnelSpecs = nil
+					for _, t := range cfg.Tunnels {
+						if t.Remote > 0 {
+							tunnelSpecs = append(tunnelSpecs, fmt.Sprintf("%d:%d", t.Local, t.Remote))
+						} else {
+							tunnelSpecs = append(tunnelSpecs, fmt.Sprintf("%d", t.Local))
+						}
+					}
+				}
+			}
 
 			// Parse tunnel specs: --tunnel 3000:8080 --tunnel 5432
 			// Fall back to --local/--remote for backward compatibility
@@ -111,6 +144,7 @@ func main() {
 		},
 	}
 
+	rootCmd.Flags().StringVar(&configFile, "config", "", "Path to YAML config file")
 	rootCmd.Flags().StringVarP(&serverAddr, "server", "s", "localhost:7000", "Server address (host:port)")
 	rootCmd.Flags().StringSliceVar(&tunnelSpecs, "tunnel", nil, "Tunnel spec localPort:remotePort (repeatable, e.g. --tunnel 3000 --tunnel 5432:9000)")
 	rootCmd.Flags().IntVarP(&localPort, "local", "l", 0, "Local port to expose (shorthand for --tunnel)")

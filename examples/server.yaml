@@ -1,0 +1,19 @@
+# gotunnel server configuration
+# Usage: gotunnel-server --config server.yaml
+
+port: 7000
+min_port: 8000
+max_port: 9000
+token: "change-me-to-a-secret-token"
+
+# Connection limits (0 = unlimited)
+max_clients: 50
+max_tunnels: 5
+max_sessions: 500
+client_timeout: 90s
+
+# TLS (optional — pick one)
+tls:
+  auto: false           # set true for self-signed cert
+  cert: ""              # path to TLS certificate file
+  key: ""               # path to TLS key file

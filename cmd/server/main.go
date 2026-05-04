@@ -18,11 +18,13 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/yan/gotunnel/pkg/config"
 	"github.com/yan/gotunnel/pkg/registry"
 	"github.com/yan/gotunnel/pkg/tunnel"
 )
 
 func main() {
+	var configFile string
 	var port int
 	var minPort, maxPort int
 	var token string
@@ -38,6 +40,48 @@ func main() {
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 				Level: slog.LevelInfo,
 			})))
+
+			// Load config file if specified, CLI flags override
+			if configFile != "" {
+				cfg, err := config.LoadServerConfig(configFile)
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
+				// Apply config file values only if CLI flag was not explicitly set
+				if !cmd.Flags().Changed("port") && cfg.ControlPort != 0 {
+					port = cfg.ControlPort
+				}
+				if !cmd.Flags().Changed("min-port") && cfg.MinPort != 0 {
+					minPort = cfg.MinPort
+				}
+				if !cmd.Flags().Changed("max-port") && cfg.MaxPort != 0 {
+					maxPort = cfg.MaxPort
+				}
+				if !cmd.Flags().Changed("token") && cfg.Token != "" {
+					token = cfg.Token
+				}
+				if !cmd.Flags().Changed("max-clients") && cfg.MaxClients != 0 {
+					maxClients = cfg.MaxClients
+				}
+				if !cmd.Flags().Changed("max-tunnels") && cfg.MaxTunnels != 0 {
+					maxTunnels = cfg.MaxTunnels
+				}
+				if !cmd.Flags().Changed("max-sessions") && cfg.MaxSessions != 0 {
+					maxSessions = cfg.MaxSessions
+				}
+				if !cmd.Flags().Changed("client-timeout") && cfg.Timeout != 0 {
+					clientTimeout = cfg.Timeout
+				}
+				if !cmd.Flags().Changed("tls-auto") && cfg.TLS.Auto {
+					tlsAuto = true
+				}
+				if !cmd.Flags().Changed("tls-cert") && cfg.TLS.Cert != "" {
+					tlsCert = cfg.TLS.Cert
+				}
+				if !cmd.Flags().Changed("tls-key") && cfg.TLS.Key != "" {
+					tlsKey = cfg.TLS.Key
+				}
+			}
 
 			addr := fmt.Sprintf(":%d", port)
 			reg := registry.New(minPort, maxPort)
@@ -92,6 +136,7 @@ func main() {
 		},
 	}
 
+	rootCmd.Flags().StringVar(&configFile, "config", "", "Path to YAML config file")
 	rootCmd.Flags().IntVarP(&port, "port", "p", 7000, "Control channel port")
 	rootCmd.Flags().IntVar(&minPort, "min-port", 8000, "Minimum allocatable port")
 	rootCmd.Flags().IntVar(&maxPort, "max-port", 9000, "Maximum allocatable port")

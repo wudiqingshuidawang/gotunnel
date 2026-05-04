@@ -1,13 +1,45 @@
 // gotunnel/pkg/config/config.go
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
 
 // ServerConfig holds server-side configuration.
 type ServerConfig struct {
-	ControlPort int
-	MinPort     int
-	MaxPort     int
+	ControlPort int           `yaml:"port"`
+	MinPort     int           `yaml:"min_port"`
+	MaxPort     int           `yaml:"max_port"`
+	Token       string        `yaml:"token"`
+	TLS         TLSConfig     `yaml:"tls"`
+	MaxClients  int           `yaml:"max_clients"`
+	MaxTunnels  int           `yaml:"max_tunnels"`
+	MaxSessions int           `yaml:"max_sessions"`
+	Timeout     time.Duration `yaml:"client_timeout"`
+}
+
+type TLSConfig struct {
+	Cert string `yaml:"cert"`
+	Key  string `yaml:"key"`
+	Auto bool   `yaml:"auto"`
+}
+
+// ClientConfig holds client-side configuration.
+type ClientConfig struct {
+	ServerAddr string         `yaml:"server"`
+	Tunnels    []TunnelConfig `yaml:"tunnels"`
+	Token      string         `yaml:"token"`
+	TLS        bool           `yaml:"tls"`
+	Insecure   bool           `yaml:"insecure"`
+}
+
+type TunnelConfig struct {
+	Local  int `yaml:"local"`
+	Remote int `yaml:"remote"`
 }
 
 // DefaultServerConfig returns sensible defaults.
@@ -16,6 +48,13 @@ func DefaultServerConfig() ServerConfig {
 		ControlPort: 7000,
 		MinPort:     8000,
 		MaxPort:     9000,
+	}
+}
+
+// DefaultClientConfig returns sensible defaults.
+func DefaultClientConfig() ClientConfig {
+	return ClientConfig{
+		ServerAddr: "localhost:7000",
 	}
 }
 
@@ -30,29 +69,42 @@ func (c ServerConfig) Validate() error {
 	return nil
 }
 
-// ClientConfig holds client-side configuration.
-type ClientConfig struct {
-	ServerAddr string
-	LocalPort  int
-	RemotePort int
-}
-
-// DefaultClientConfig returns sensible defaults.
-func DefaultClientConfig() ClientConfig {
-	return ClientConfig{
-		ServerAddr: "localhost:7000",
-		LocalPort:  3000,
-		RemotePort: 0,
-	}
-}
-
 // Validate checks the config for correctness.
 func (c ClientConfig) Validate() error {
 	if c.ServerAddr == "" {
 		return fmt.Errorf("server address is required")
 	}
-	if c.LocalPort <= 0 || c.LocalPort > 65535 {
-		return fmt.Errorf("invalid local port: %d", c.LocalPort)
+	for i, t := range c.Tunnels {
+		if t.Local <= 0 || t.Local > 65535 {
+			return fmt.Errorf("tunnel %d: invalid local port: %d", i, t.Local)
+		}
 	}
 	return nil
+}
+
+// LoadServerConfig reads a YAML file and returns a ServerConfig.
+// Fields not set in the file keep their zero values (use defaults from CLI).
+func LoadServerConfig(path string) (ServerConfig, error) {
+	var cfg ServerConfig
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, fmt.Errorf("read config: %w", err)
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return cfg, fmt.Errorf("parse config: %w", err)
+	}
+	return cfg, nil
+}
+
+// LoadClientConfig reads a YAML file and returns a ClientConfig.
+func LoadClientConfig(path string) (ClientConfig, error) {
+	var cfg ClientConfig
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, fmt.Errorf("read config: %w", err)
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return cfg, fmt.Errorf("parse config: %w", err)
+	}
+	return cfg, nil
 }
