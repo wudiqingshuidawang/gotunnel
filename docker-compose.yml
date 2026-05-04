@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  server:
+    build: .
+    container_name: gotunnel-server
+    ports:
+      - "7000:7000"       # control channel
+      - "10000-10100:10000-10100"  # tunnel port range (adjust as needed)
+    command:
+      - "--port=7000"
+      - "--min-port=10000"
+      - "--max-port=10100"
+      - "--token=${GOTUNNEL_TOKEN:-}"
+      - "--max-clients=50"
+      - "--max-tunnels=5"
+      - "--client-timeout=90s"
+    restart: unless-stopped
+
+  # Example: uncomment to run client alongside server (for testing)
+  # client:
+  #   build: .
+  #   container_name: gotunnel-client
+  #   entrypoint: ["gotunnel-client"]
+  #   command:
+  #     - "--server=server:7000"
+  #     - "--tunnel=3000"
+  #     - "--token=${GOTUNNEL_TOKEN:-}"
+  #   depends_on:
+  #     - server
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   restart: unless-stopped
