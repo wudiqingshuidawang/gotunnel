@@ -28,6 +28,12 @@ type Frame struct {
 // headerSize is Type(1) + Length(4) = 5 bytes
 const headerSize = 5
 
+// MaxPayloadSize is the maximum allowed frame payload size (1MB).
+const MaxPayloadSize = 1 << 20
+
+// ErrFrameTooLarge is returned when a frame payload exceeds MaxPayloadSize.
+var ErrFrameTooLarge = fmt.Errorf("frame payload exceeds maximum size of %d bytes", MaxPayloadSize)
+
 // WriteFrame writes a frame to the writer.
 func WriteFrame(w io.Writer, f Frame) error {
 	header := make([]byte, headerSize)
@@ -56,6 +62,10 @@ func ReadFrame(r io.Reader) (Frame, error) {
 
 	frameType := header[0]
 	length := binary.BigEndian.Uint32(header[1:5])
+
+	if length > MaxPayloadSize {
+		return Frame{}, ErrFrameTooLarge
+	}
 
 	var payload []byte
 	if length > 0 {
