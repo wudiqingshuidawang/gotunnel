@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/yan/gotunnel/pkg/registry"
 	"github.com/yan/gotunnel/pkg/tunnel"
 )
 
@@ -25,7 +26,8 @@ func main() {
 			})))
 
 			addr := fmt.Sprintf(":%d", port)
-			srv := tunnel.NewServer(addr)
+			reg := registry.New(minPort, maxPort)
+			srv := tunnel.NewServerWithRegistry(addr, reg)
 
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
