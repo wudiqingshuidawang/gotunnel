@@ -54,7 +54,7 @@ func (c *Client) Connect() error {
 	}
 	c.conn = conn
 
-	regMsg := protocol.RegisterMsg{LocalPort: c.localPort}
+	regMsg := protocol.RegisterMsg{LocalPort: c.localPort, RemotePort: c.remotePort}
 	frame, _ := protocol.ToFrame(protocol.MsgTypeRegister, regMsg)
 	if err := c.writeFrame(frame); err != nil {
 		conn.Close()

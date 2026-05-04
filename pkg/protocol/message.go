@@ -5,7 +5,8 @@ import "encoding/json"
 
 // RegisterMsg: client tells server which local port to expose
 type RegisterMsg struct {
-	LocalPort int `json:"local_port"`
+	LocalPort  int `json:"local_port"`
+	RemotePort int `json:"remote_port,omitempty"`
 }
 
 // RegisterAckMsg: server tells client which remote port was assigned

@@ -184,7 +184,7 @@ func (s *Server) handleRegister(cs *clientState, frame protocol.Frame) {
 		return
 	}
 
-	port, err := s.registry.Allocate(0)
+	port, err := s.registry.Allocate(msg.RemotePort)
 	if err != nil {
 		slog.Error("allocate port", "err", err)
 		s.writeFrame(cs, protocol.Frame{
