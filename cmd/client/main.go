@@ -2,6 +2,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,6 +18,9 @@ func main() {
 	var serverAddr string
 	var localPort int
 	var remotePort int
+	var token string
+	var enableTLS bool
+	var insecure bool
 
 	rootCmd := &cobra.Command{
 		Use:   "gotunnel-client",
@@ -28,6 +32,13 @@ func main() {
 
 			client := tunnel.NewClient(serverAddr, localPort, remotePort)
 			client.SetDialTimeout(5 * time.Second)
+			client.SetToken(token)
+			if enableTLS {
+				client.SetTLSConfig(&tls.Config{
+					InsecureSkipVerify: insecure,
+				})
+				slog.Info("TLS enabled", "insecure", insecure)
+			}
 
 			slog.Info("connecting to server",
 				"server", serverAddr,
@@ -63,6 +74,12 @@ func main() {
 				time.Sleep(2 * time.Second)
 				client = tunnel.NewClient(serverAddr, localPort, remotePort)
 				client.SetDialTimeout(5 * time.Second)
+				client.SetToken(token)
+				if enableTLS {
+					client.SetTLSConfig(&tls.Config{
+						InsecureSkipVerify: insecure,
+					})
+				}
 			}
 		},
 	}
@@ -70,6 +87,9 @@ func main() {
 	rootCmd.Flags().StringVarP(&serverAddr, "server", "s", "localhost:7000", "Server address (host:port)")
 	rootCmd.Flags().IntVarP(&localPort, "local", "l", 3000, "Local port to expose")
 	rootCmd.Flags().IntVarP(&remotePort, "remote", "r", 0, "Requested remote port (0 = auto)")
+	rootCmd.Flags().StringVar(&token, "token", "", "Authentication token")
+	rootCmd.Flags().BoolVar(&enableTLS, "tls", false, "Enable TLS for control channel")
+	rootCmd.Flags().BoolVar(&insecure, "insecure", false, "Skip TLS certificate verification (for self-signed certs)")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

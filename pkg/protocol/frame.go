@@ -15,6 +15,8 @@ const (
 	MsgTypeData        uint8 = 0x04
 	MsgTypeClose       uint8 = 0x05
 	MsgTypeHeartbeat   uint8 = 0x06
+	MsgTypeAuth        uint8 = 0x07
+	MsgTypeAuthAck     uint8 = 0x08
 	MsgTypeError       uint8 = 0xFF
 )
 

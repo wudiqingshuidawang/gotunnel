@@ -98,3 +98,13 @@ func TestHeartbeatMessage(t *testing.T) {
 		t.Fatalf("FromFrame heartbeat: %v", err)
 	}
 }
+
+func TestAuthMessage(t *testing.T) {
+	msg := AuthMsg{Token: "secret123"}
+	frame, _ := ToFrame(MsgTypeAuth, msg)
+	var got AuthMsg
+	FromFrame(frame, &got)
+	if got.Token != "secret123" {
+		t.Errorf("Token = %s, want secret123", got.Token)
+	}
+}

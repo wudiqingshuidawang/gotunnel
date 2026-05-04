@@ -1,5 +1,9 @@
 # Binaries
 bin/
+client
+server
+gotunnel-server
+gotunnel-client
 
 # Go
 *.exe

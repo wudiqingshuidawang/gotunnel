@@ -36,6 +36,16 @@ type ErrorMsg struct {
 	Msg  string `json:"msg"`
 }
 
+// AuthMsg: client sends token for authentication
+type AuthMsg struct {
+	Token string `json:"token"`
+}
+
+// AuthAckMsg: server confirms authentication success
+type AuthAckMsg struct {
+	OK bool `json:"ok"`
+}
+
 // ToFrame serializes a message payload into a Frame.
 func ToFrame(msgType uint8, payload interface{}) (Frame, error) {
 	data, err := json.Marshal(payload)

@@ -3,10 +3,12 @@ package tunnel
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/yan/gotunnel/pkg/protocol"
 	"github.com/yan/gotunnel/pkg/registry"
@@ -17,6 +19,13 @@ type Server struct {
 	controlAddr string
 	listener    net.Listener
 	registry    *registry.Registry
+	token       string // optional auth token; empty means no auth
+	tlsConfig   *tls.Config // nil = no TLS
+
+	maxClients          int // 0 = unlimited
+	maxTunnelsPerClient int // 0 = unlimited
+	maxSessions         int // 0 = unlimited
+	clientTimeout       time.Duration // 0 = no timeout
 
 	mu       sync.RWMutex
 	clients  map[string]*clientState
@@ -30,6 +39,7 @@ type clientState struct {
 	id     string
 	conn   net.Conn
 	writer *sync.Mutex
+	timer  *time.Timer // heartbeat timeout; nil if no timeout configured
 }
 
 type tunnelState struct {
@@ -71,8 +81,34 @@ func NewServerWithRegistry(controlAddr string, reg *registry.Registry) *Server {
 	}
 }
 
+// SetToken configures an authentication token. If non-empty, clients must
+// send a valid AUTH frame before any other message.
+func (s *Server) SetToken(token string) {
+	s.token = token
+}
+
+func (s *Server) SetMaxClients(n int)          { s.maxClients = n }
+func (s *Server) SetMaxTunnelsPerClient(n int)  { s.maxTunnelsPerClient = n }
+func (s *Server) SetMaxSessions(n int)          { s.maxSessions = n }
+
+// SetClientTimeout sets the heartbeat timeout. If no frame is received from
+// a client within this duration, the server closes the connection.
+// A zero duration disables the timeout (default).
+func (s *Server) SetClientTimeout(d time.Duration) { s.clientTimeout = d }
+
+// SetTLSConfig configures TLS for the control channel. If nil, TLS is disabled.
+func (s *Server) SetTLSConfig(cfg *tls.Config) {
+	s.tlsConfig = cfg
+}
+
 func (s *Server) Start() error {
-	ln, err := net.Listen("tcp", s.controlAddr)
+	var ln net.Listener
+	var err error
+	if s.tlsConfig != nil {
+		ln, err = tls.Listen("tcp", s.controlAddr, s.tlsConfig)
+	} else {
+		ln, err = net.Listen("tcp", s.controlAddr)
+	}
 	if err != nil {
 		close(s.readyCh)
 		return fmt.Errorf("listen %s: %w", s.controlAddr, err)
@@ -146,20 +182,75 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	s.mu.Lock()
 	s.clients[clientID] = cs
+	if s.maxClients > 0 && len(s.clients) > s.maxClients {
+		s.writeFrame(cs, protocol.Frame{
+			Type:    protocol.MsgTypeError,
+			Payload: mustMarshal(protocol.ErrorMsg{Code: 5, Msg: "server at capacity"}),
+		})
+		delete(s.clients, clientID)
+		s.mu.Unlock()
+		conn.Close()
+		return
+	}
 	s.mu.Unlock()
 
 	slog.Info("client connected", "id", clientID, "addr", conn.RemoteAddr())
+
+	// Start heartbeat timeout timer if configured
+	if s.clientTimeout > 0 {
+		cs.timer = time.AfterFunc(s.clientTimeout, func() {
+			slog.Warn("client heartbeat timeout", "id", clientID)
+			conn.Close()
+		})
+	}
+
 	defer func() {
+		if cs.timer != nil {
+			cs.timer.Stop()
+		}
 		s.removeClient(clientID)
 		conn.Close()
 		slog.Info("client disconnected", "id", clientID)
 	}()
+
+	// If auth is required, expect AUTH as the first frame
+	if s.token != "" {
+		frame, err := protocol.ReadFrame(conn)
+		if err != nil {
+			slog.Debug("auth read error", "client", clientID, "err", err)
+			return
+		}
+		if frame.Type != protocol.MsgTypeAuth {
+			s.writeFrame(cs, protocol.Frame{
+				Type:    protocol.MsgTypeError,
+				Payload: mustMarshal(protocol.ErrorMsg{Code: 3, Msg: "authentication required"}),
+			})
+			return
+		}
+		var authMsg protocol.AuthMsg
+		if err := protocol.FromFrame(frame, &authMsg); err != nil || authMsg.Token != s.token {
+			s.writeFrame(cs, protocol.Frame{
+				Type:    protocol.MsgTypeError,
+				Payload: mustMarshal(protocol.ErrorMsg{Code: 4, Msg: "invalid token"}),
+			})
+			return
+		}
+		s.writeFrame(cs, protocol.Frame{
+			Type:    protocol.MsgTypeAuthAck,
+			Payload: mustMarshal(protocol.AuthAckMsg{OK: true}),
+		})
+	}
 
 	for {
 		frame, err := protocol.ReadFrame(conn)
 		if err != nil {
 			slog.Debug("read error", "client", clientID, "err", err)
 			return
+		}
+
+		// Reset heartbeat timer on any received frame
+		if cs.timer != nil {
+			cs.timer.Reset(s.clientTimeout)
 		}
 
 		switch frame.Type {
@@ -182,6 +273,24 @@ func (s *Server) handleRegister(cs *clientState, frame protocol.Frame) {
 	if err := protocol.FromFrame(frame, &msg); err != nil {
 		slog.Error("parse register", "err", err)
 		return
+	}
+
+	if s.maxTunnelsPerClient > 0 {
+		s.mu.RLock()
+		count := 0
+		for _, ts := range s.tunnels {
+			if ts.clientID == cs.id {
+				count++
+			}
+		}
+		s.mu.RUnlock()
+		if count >= s.maxTunnelsPerClient {
+			s.writeFrame(cs, protocol.Frame{
+				Type:    protocol.MsgTypeError,
+				Payload: mustMarshal(protocol.ErrorMsg{Code: 6, Msg: "tunnel limit reached"}),
+			})
+			return
+		}
 	}
 
 	port, err := s.registry.Allocate(msg.RemotePort)
@@ -239,6 +348,17 @@ func (s *Server) acceptPublicConnections(ts *tunnelState, cs *clientState) {
 			default:
 				slog.Debug("public accept error", "port", ts.remotePort, "err", err)
 				return
+			}
+		}
+
+		if s.maxSessions > 0 {
+			s.mu.RLock()
+			atCapacity := len(s.sessions) >= s.maxSessions
+			s.mu.RUnlock()
+			if atCapacity {
+				publicConn.Close()
+				slog.Warn("session limit reached", "port", ts.remotePort)
+				continue
 			}
 		}
 

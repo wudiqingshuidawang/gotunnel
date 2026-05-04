@@ -2,6 +2,7 @@
 package tunnel
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -17,6 +18,8 @@ type Client struct {
 	localPort    int
 	remotePort   int
 	dialTimeout  time.Duration
+	token        string      // optional auth token
+	tlsConfig    *tls.Config // nil = no TLS
 	conn         net.Conn
 	writer       sync.Mutex
 	remotePortMu sync.RWMutex
@@ -40,6 +43,16 @@ func (c *Client) SetDialTimeout(d time.Duration) {
 	c.dialTimeout = d
 }
 
+// SetToken configures an authentication token to send during handshake.
+func (c *Client) SetToken(token string) {
+	c.token = token
+}
+
+// SetTLSConfig configures TLS for the control channel. If nil, TLS is disabled.
+func (c *Client) SetTLSConfig(cfg *tls.Config) {
+	c.tlsConfig = cfg
+}
+
 func (c *Client) RemotePort() int {
 	c.remotePortMu.RLock()
 	defer c.remotePortMu.RUnlock()
@@ -48,11 +61,42 @@ func (c *Client) RemotePort() int {
 
 // Connect establishes the control connection and registers with the server.
 func (c *Client) Connect() error {
-	conn, err := net.DialTimeout("tcp", c.serverAddr, c.dialTimeout)
+	var conn net.Conn
+	var err error
+	dialer := &net.Dialer{Timeout: c.dialTimeout}
+	if c.tlsConfig != nil {
+		conn, err = tls.DialWithDialer(dialer, "tcp", c.serverAddr, c.tlsConfig)
+	} else {
+		conn, err = dialer.Dial("tcp", c.serverAddr)
+	}
 	if err != nil {
 		return fmt.Errorf("dial server: %w", err)
 	}
 	c.conn = conn
+
+	// Send AUTH if token is configured
+	if c.token != "" {
+		authFrame, _ := protocol.ToFrame(protocol.MsgTypeAuth, protocol.AuthMsg{Token: c.token})
+		if err := c.writeFrame(authFrame); err != nil {
+			conn.Close()
+			return fmt.Errorf("send auth: %w", err)
+		}
+		resp, err := protocol.ReadFrame(conn)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("read auth response: %w", err)
+		}
+		if resp.Type == protocol.MsgTypeError {
+			var errMsg protocol.ErrorMsg
+			protocol.FromFrame(resp, &errMsg)
+			conn.Close()
+			return fmt.Errorf("auth failed: %s", errMsg.Msg)
+		}
+		if resp.Type != protocol.MsgTypeAuthAck {
+			conn.Close()
+			return fmt.Errorf("unexpected auth response type: %d", resp.Type)
+		}
+	}
 
 	regMsg := protocol.RegisterMsg{LocalPort: c.localPort, RemotePort: c.remotePort}
 	frame, _ := protocol.ToFrame(protocol.MsgTypeRegister, regMsg)
