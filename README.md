@@ -14,6 +14,10 @@ Like ngrok, but simpler, open-source, and self-hosted.
 - Heartbeat timeout — detect dead clients automatically
 - Auto-reconnect — client reconnects with exponential backoff
 - Self-signed TLS — auto-generate certificates for quick setup
+- HTTP mode — inject X-Forwarded-For / X-Real-IP headers automatically
+- Web dashboard — real-time monitoring at a glance
+- YAML config file — `--config` flag for production setups
+- Docker support — ready-to-deploy Dockerfile and docker-compose
 
 ## Quick Start
 
@@ -37,6 +41,17 @@ make build
 
 Your local service on port 3000 is now accessible at `your-vps:<assigned-port>`.
 
+### Docker
+
+```bash
+# Build and run server
+docker compose up -d server
+
+# Or build manually
+docker build -t gotunnel .
+docker run -p 7000:7000 gotunnel --port 7000 --token mysecret
+```
+
 ## Usage
 
 ### Server
@@ -56,6 +71,8 @@ Flags:
       --max-tunnels int       Max tunnels per client (0=unlimited)
       --max-sessions int      Max concurrent sessions (0=unlimited)
       --client-timeout duration  Client heartbeat timeout, e.g. 90s (0=no timeout)
+      --dashboard-port int    Web dashboard port (0=disabled)
+      --config string         Path to YAML config file
 ```
 
 ### Client
@@ -71,6 +88,8 @@ Flags:
       --token string      Authentication token
       --tls               Enable TLS for control channel
       --insecure          Skip TLS certificate verification
+      --http              Enable HTTP header injection (X-Forwarded-For, X-Real-IP)
+      --config string     Path to YAML config file
 ```
 
 ## Examples
@@ -118,15 +137,31 @@ gotunnel-server --port 7000 --tls-auto
 gotunnel-client --server vps:7000 --local 3000 --tls --insecure
 ```
 
-### With TLS (production certificate)
+### HTTP mode (for web development)
+
+Automatically inject `X-Forwarded-For` and `X-Real-IP` headers:
 
 ```bash
-# Server
-gotunnel-server --port 7000 --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
-
-# Client
-gotunnel-client --server vps:7000 --local 3000 --tls
+gotunnel-client --server vps:7000 --tunnel 3000 --http
 ```
+
+### Web dashboard
+
+Monitor active tunnels, connections, and traffic:
+
+```bash
+gotunnel-server --port 7000 --dashboard-port 8080
+# Open http://your-vps:8080 in browser
+```
+
+### YAML config file
+
+```bash
+gotunnel-server --config server.yaml
+gotunnel-client --config client.yaml
+```
+
+See `examples/` for sample config files.
 
 ### Full production setup
 
@@ -139,7 +174,8 @@ gotunnel-server --port 7000 \
   --max-sessions 500 \
   --client-timeout 90s \
   --min-port 10000 \
-  --max-port 20000
+  --max-port 20000 \
+  --dashboard-port 8080
 ```
 
 ## How It Works
