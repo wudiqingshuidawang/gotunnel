@@ -265,13 +265,6 @@ func (s *Server) acceptPublicConnections(ts *tunnelState, cs *clientState) {
 }
 
 func (s *Server) relayPublicToClient(publicConn net.Conn, cs *clientState, connID string) {
-	defer func() {
-		publicConn.Close()
-		s.mu.Lock()
-		delete(s.sessions, connID)
-		s.mu.Unlock()
-	}()
-
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := publicConn.Read(buf)
@@ -287,6 +280,9 @@ func (s *Server) relayPublicToClient(publicConn net.Conn, cs *clientState, connI
 			})
 		}
 		if err != nil {
+			// Tell the client that the public side is done sending.
+			// The session is cleaned up when the client responds with
+			// its own CloseMsg (handled by handleCloseFromClient).
 			s.writeFrame(cs, protocol.Frame{
 				Type:    protocol.MsgTypeClose,
 				Payload: mustMarshal(protocol.CloseMsg{ConnID: connID}),

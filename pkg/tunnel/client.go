@@ -20,6 +20,9 @@ type Client struct {
 	conn         net.Conn
 	writer       sync.Mutex
 	remotePortMu sync.RWMutex
+
+	localConns   map[string]net.Conn
+	localConnsMu sync.Mutex
 }
 
 // NewClient creates a client that will expose localPort through the server.
@@ -29,6 +32,7 @@ func NewClient(serverAddr string, localPort, remotePort int) *Client {
 		localPort:   localPort,
 		remotePort:  remotePort,
 		dialTimeout: 5 * time.Second,
+		localConns:  make(map[string]net.Conn),
 	}
 }
 
@@ -105,19 +109,20 @@ func (c *Client) Run() {
 		case protocol.MsgTypeNewConn:
 			var msg protocol.NewConnMsg
 			protocol.FromFrame(frame, &msg)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				c.handleNewConn(msg.ConnID)
-			}()
+			// Call synchronously so localConn is registered in the map
+			// before subsequent DataMsg frames arrive. The relay goroutine
+			// (started inside handleNewConn) handles ongoing data transfer.
+			c.handleNewConn(msg.ConnID)
 		case protocol.MsgTypeData:
 			var msg protocol.DataMsg
 			protocol.FromFrame(frame, &msg)
 			slog.Debug("data from server", "connID", msg.ConnID, "len", len(msg.Data))
+			c.forwardToLocal(msg.ConnID, msg.Data)
 		case protocol.MsgTypeClose:
 			var msg protocol.CloseMsg
 			protocol.FromFrame(frame, &msg)
 			slog.Debug("close from server", "connID", msg.ConnID)
+			c.closeLocalConn(msg.ConnID)
 		case protocol.MsgTypeHeartbeat:
 			// heartbeat ack
 		default:
@@ -140,11 +145,54 @@ func (c *Client) handleNewConn(connID string) {
 		return
 	}
 
+	c.localConnsMu.Lock()
+	c.localConns[connID] = localConn
+	c.localConnsMu.Unlock()
+
 	go c.relayLocalToServer(localConn, connID)
 }
 
+func (c *Client) forwardToLocal(connID string, data []byte) {
+	c.localConnsMu.Lock()
+	localConn, ok := c.localConns[connID]
+	c.localConnsMu.Unlock()
+
+	if !ok {
+		slog.Warn("no local conn for data", "connID", connID)
+		return
+	}
+
+	if _, err := localConn.Write(data); err != nil {
+		slog.Error("write to local", "err", err, "connID", connID)
+	}
+}
+
+func (c *Client) closeLocalConn(connID string) {
+	c.localConnsMu.Lock()
+	localConn, ok := c.localConns[connID]
+	c.localConnsMu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	// Half-close: shut down the write side so the local service sees EOF
+	// but can still send back any remaining data. The relayLocalToServer
+	// goroutine will continue reading until the local service finishes.
+	if tc, ok := localConn.(*net.TCPConn); ok {
+		tc.CloseWrite()
+	} else {
+		localConn.Close()
+	}
+}
+
 func (c *Client) relayLocalToServer(localConn net.Conn, connID string) {
-	defer localConn.Close()
+	defer func() {
+		localConn.Close()
+		c.localConnsMu.Lock()
+		delete(c.localConns, connID)
+		c.localConnsMu.Unlock()
+	}()
 
 	buf := make([]byte, 32*1024)
 	for {
