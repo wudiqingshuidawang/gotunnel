@@ -16,7 +16,8 @@ type RegisterAckMsg struct {
 
 // NewConnMsg: server tells client a new external connection arrived
 type NewConnMsg struct {
-	ConnID string `json:"conn_id"`
+	ConnID     string `json:"conn_id"`
+	RemotePort int    `json:"remote_port,omitempty"`
 }
 
 // DataMsg: carries data for a specific tunnel session

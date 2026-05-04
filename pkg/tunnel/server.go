@@ -377,7 +377,7 @@ func (s *Server) acceptPublicConnections(ts *tunnelState, cs *clientState) {
 
 		s.writeFrame(cs, protocol.Frame{
 			Type:    protocol.MsgTypeNewConn,
-			Payload: mustMarshal(protocol.NewConnMsg{ConnID: connID}),
+			Payload: mustMarshal(protocol.NewConnMsg{ConnID: connID, RemotePort: ts.remotePort}),
 		})
 
 		go s.relayPublicToClient(publicConn, cs, connID)

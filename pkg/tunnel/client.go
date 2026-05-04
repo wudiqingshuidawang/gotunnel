@@ -12,31 +12,44 @@ import (
 	"github.com/yan/gotunnel/pkg/protocol"
 )
 
-// Client connects to a tunnel server and forwards traffic to a local service.
+// tunnelRoute maps a remote port (assigned by server) to a local port.
+type tunnelRoute struct {
+	localPort  int
+	remotePort int // filled after REGISTER_ACK
+}
+
+// Client connects to a tunnel server and forwards traffic to local services.
 type Client struct {
-	serverAddr   string
-	localPort    int
-	remotePort   int
-	dialTimeout  time.Duration
-	token        string      // optional auth token
-	tlsConfig    *tls.Config // nil = no TLS
-	conn         net.Conn
-	writer       sync.Mutex
-	remotePortMu sync.RWMutex
+	serverAddr  string
+	dialTimeout time.Duration
+	token       string      // optional auth token
+	tlsConfig   *tls.Config // nil = no TLS
+	conn        net.Conn
+	writer      sync.Mutex
+
+	tunnels  []*tunnelRoute         // ordered list of tunnels
+	routes   map[int]*tunnelRoute   // remotePort -> route (populated after registration)
+	routeMu  sync.RWMutex
 
 	localConns   map[string]net.Conn
 	localConnsMu sync.Mutex
 }
 
-// NewClient creates a client that will expose localPort through the server.
-func NewClient(serverAddr string, localPort, remotePort int) *Client {
+// NewClient creates a client that will connect to the given server.
+// Use AddTunnel to register one or more local ports before calling Connect.
+func NewClient(serverAddr string) *Client {
 	return &Client{
 		serverAddr:  serverAddr,
-		localPort:   localPort,
-		remotePort:  remotePort,
 		dialTimeout: 5 * time.Second,
+		routes:      make(map[int]*tunnelRoute),
 		localConns:  make(map[string]net.Conn),
 	}
+}
+
+// AddTunnel registers a tunnel: localPort is the local service to expose,
+// remotePort is the requested server port (0 = auto-assign).
+func (c *Client) AddTunnel(localPort, remotePort int) {
+	c.tunnels = append(c.tunnels, &tunnelRoute{localPort: localPort, remotePort: remotePort})
 }
 
 func (c *Client) SetDialTimeout(d time.Duration) {
@@ -53,10 +66,25 @@ func (c *Client) SetTLSConfig(cfg *tls.Config) {
 	c.tlsConfig = cfg
 }
 
+// RemotePort returns the first assigned remote port (for single-tunnel compatibility).
 func (c *Client) RemotePort() int {
-	c.remotePortMu.RLock()
-	defer c.remotePortMu.RUnlock()
-	return c.remotePort
+	c.routeMu.RLock()
+	defer c.routeMu.RUnlock()
+	for _, r := range c.routes {
+		return r.remotePort
+	}
+	return 0
+}
+
+// RemotePorts returns all assigned remote ports.
+func (c *Client) RemotePorts() []int {
+	c.routeMu.RLock()
+	defer c.routeMu.RUnlock()
+	ports := make([]int, 0, len(c.routes))
+	for _, r := range c.routes {
+		ports = append(ports, r.remotePort)
+	}
+	return ports
 }
 
 // Connect establishes the control connection and registers with the server.
@@ -98,35 +126,39 @@ func (c *Client) Connect() error {
 		}
 	}
 
-	regMsg := protocol.RegisterMsg{LocalPort: c.localPort, RemotePort: c.remotePort}
-	frame, _ := protocol.ToFrame(protocol.MsgTypeRegister, regMsg)
-	if err := c.writeFrame(frame); err != nil {
-		conn.Close()
-		return fmt.Errorf("send register: %w", err)
-	}
+	// Register all tunnels
+	for _, route := range c.tunnels {
+		regMsg := protocol.RegisterMsg{LocalPort: route.localPort, RemotePort: route.remotePort}
+		frame, _ := protocol.ToFrame(protocol.MsgTypeRegister, regMsg)
+		if err := c.writeFrame(frame); err != nil {
+			conn.Close()
+			return fmt.Errorf("send register: %w", err)
+		}
 
-	resp, err := protocol.ReadFrame(conn)
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("read register ack: %w", err)
-	}
+		resp, err := protocol.ReadFrame(conn)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("read register ack: %w", err)
+		}
 
-	switch resp.Type {
-	case protocol.MsgTypeRegisterAck:
-		var ack protocol.RegisterAckMsg
-		protocol.FromFrame(resp, &ack)
-		c.remotePortMu.Lock()
-		c.remotePort = ack.RemotePort
-		c.remotePortMu.Unlock()
-		slog.Info("registered", "remote_port", ack.RemotePort)
-	case protocol.MsgTypeError:
-		var errMsg protocol.ErrorMsg
-		protocol.FromFrame(resp, &errMsg)
-		conn.Close()
-		return fmt.Errorf("server error: %s", errMsg.Msg)
-	default:
-		conn.Close()
-		return fmt.Errorf("unexpected response type: %d", resp.Type)
+		switch resp.Type {
+		case protocol.MsgTypeRegisterAck:
+			var ack protocol.RegisterAckMsg
+			protocol.FromFrame(resp, &ack)
+			c.routeMu.Lock()
+			route.remotePort = ack.RemotePort
+			c.routes[ack.RemotePort] = route
+			c.routeMu.Unlock()
+			slog.Info("tunnel registered", "local", route.localPort, "remote", ack.RemotePort)
+		case protocol.MsgTypeError:
+			var errMsg protocol.ErrorMsg
+			protocol.FromFrame(resp, &errMsg)
+			conn.Close()
+			return fmt.Errorf("server error: %s", errMsg.Msg)
+		default:
+			conn.Close()
+			return fmt.Errorf("unexpected response type: %d", resp.Type)
+		}
 	}
 
 	return nil
@@ -156,7 +188,7 @@ func (c *Client) Run() {
 			// Call synchronously so localConn is registered in the map
 			// before subsequent DataMsg frames arrive. The relay goroutine
 			// (started inside handleNewConn) handles ongoing data transfer.
-			c.handleNewConn(msg.ConnID)
+			c.handleNewConn(msg.ConnID, msg.RemotePort)
 		case protocol.MsgTypeData:
 			var msg protocol.DataMsg
 			protocol.FromFrame(frame, &msg)
@@ -175,10 +207,30 @@ func (c *Client) Run() {
 	}
 }
 
-func (c *Client) handleNewConn(connID string) {
-	slog.Info("new tunnel connection", "connID", connID)
+func (c *Client) handleNewConn(connID string, remotePort int) {
+	c.routeMu.RLock()
+	route, ok := c.routes[remotePort]
+	c.routeMu.RUnlock()
 
-	localAddr := fmt.Sprintf("127.0.0.1:%d", c.localPort)
+	if !ok {
+		// Fallback for old servers that don't send RemotePort: use first route
+		c.routeMu.RLock()
+		for _, r := range c.routes {
+			route = r
+			ok = true
+			break
+		}
+		c.routeMu.RUnlock()
+	}
+
+	if !ok || route == nil {
+		slog.Warn("no route for connection", "connID", connID, "remotePort", remotePort)
+		return
+	}
+
+	slog.Info("new tunnel connection", "connID", connID, "remotePort", remotePort, "localPort", route.localPort)
+
+	localAddr := fmt.Sprintf("127.0.0.1:%d", route.localPort)
 	localConn, err := net.DialTimeout("tcp", localAddr, 3*time.Second)
 	if err != nil {
 		slog.Error("connect to local service", "err", err, "addr", localAddr)
